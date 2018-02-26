@@ -2824,12 +2824,12 @@ compiler_try_except(struct compiler *c, stmt_ty s)
         ADDOP(c, POP_TOP);
         if (handler->v.ExceptHandler.name) {
             basicblock *cleanup_end, *cleanup_body;
-            struct subscope *newscope;
+            /*struct subscope *newscope;*/
 
             cleanup_end = compiler_new_block(c);
             cleanup_body = compiler_new_block(c);
-            newscope = compiler_new_subscope(c, handler->v.ExceptHandler.name);
-            if (!(cleanup_end || cleanup_body || newscope))
+            /*newscope = compiler_new_subscope(c, handler->v.ExceptHandler.name);*/
+            if (!(cleanup_end || cleanup_body /*|| newscope*/))
                 return 0;
 
             compiler_nameop(c, handler->v.ExceptHandler.name, Store);
@@ -2871,7 +2871,7 @@ compiler_try_except(struct compiler *c, stmt_ty s)
             ADDOP(c, END_FINALLY);
             ADDOP(c, POP_EXCEPT);
             compiler_pop_fblock(c, FINALLY_END, cleanup_end);
-            compiler_pop_subscope(c, newscope);
+            /*compiler_pop_subscope(c, newscope);*/
         }
         else {
             basicblock *cleanup_body;
