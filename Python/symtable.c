@@ -1487,6 +1487,9 @@ symtable_visit_expr(struct symtable *st, expr_ty e)
     case NameConstant_kind:
         /* Nothing to do here. */
         break;
+    case NamedExp_kind:
+        VISIT(st, expr, e->v.NamedExp.body);
+        break;
     /* The following exprs can be assignment targets. */
     case Attribute_kind:
         VISIT(st, expr, e->v.Attribute.value);

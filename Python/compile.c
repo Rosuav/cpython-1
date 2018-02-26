@@ -4656,6 +4656,9 @@ compiler_visit_expr(struct compiler *c, expr_ty e)
     case NameConstant_kind:
         ADDOP_O(c, LOAD_CONST, e->v.NameConstant.value, consts);
         break;
+    case NamedExp_kind:
+        VISIT(c, expr, e->v.NamedExp.body);
+        break;
     /* The following exprs can be assignment targets. */
     case Attribute_kind:
         if (e->v.Attribute.ctx != AugStore)

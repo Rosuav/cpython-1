@@ -262,6 +262,12 @@ static char *GeneratorExp_fields[]={
     "elt",
     "generators",
 };
+static PyTypeObject *NamedExp_type;
+_Py_IDENTIFIER(asname);
+static char *NamedExp_fields[]={
+    "body",
+    "asname",
+};
 static PyTypeObject *Await_type;
 static char *Await_fields[]={
     "value",
@@ -494,7 +500,6 @@ static char *keyword_fields[]={
 };
 static PyTypeObject *alias_type;
 static PyObject* ast2obj_alias(void*);
-_Py_IDENTIFIER(asname);
 static char *alias_fields[]={
     "name",
     "asname",
@@ -937,6 +942,8 @@ static int init_types(void)
     GeneratorExp_type = make_type("GeneratorExp", expr_type,
                                   GeneratorExp_fields, 2);
     if (!GeneratorExp_type) return 0;
+    NamedExp_type = make_type("NamedExp", expr_type, NamedExp_fields, 2);
+    if (!NamedExp_type) return 0;
     Await_type = make_type("Await", expr_type, Await_fields, 1);
     if (!Await_type) return 0;
     Yield_type = make_type("Yield", expr_type, Yield_fields, 1);
@@ -1996,6 +2003,32 @@ GeneratorExp(expr_ty elt, asdl_seq * generators, int lineno, int col_offset,
     p->kind = GeneratorExp_kind;
     p->v.GeneratorExp.elt = elt;
     p->v.GeneratorExp.generators = generators;
+    p->lineno = lineno;
+    p->col_offset = col_offset;
+    return p;
+}
+
+expr_ty
+NamedExp(expr_ty body, identifier asname, int lineno, int col_offset, PyArena
+         *arena)
+{
+    expr_ty p;
+    if (!body) {
+        PyErr_SetString(PyExc_ValueError,
+                        "field body is required for NamedExp");
+        return NULL;
+    }
+    if (!asname) {
+        PyErr_SetString(PyExc_ValueError,
+                        "field asname is required for NamedExp");
+        return NULL;
+    }
+    p = (expr_ty)PyArena_Malloc(arena, sizeof(*p));
+    if (!p)
+        return NULL;
+    p->kind = NamedExp_kind;
+    p->v.NamedExp.body = body;
+    p->v.NamedExp.asname = asname;
     p->lineno = lineno;
     p->col_offset = col_offset;
     return p;
@@ -3243,6 +3276,20 @@ ast2obj_expr(void* _o)
                              ast2obj_comprehension);
         if (!value) goto failed;
         if (_PyObject_SetAttrId(result, &PyId_generators, value) == -1)
+            goto failed;
+        Py_DECREF(value);
+        break;
+    case NamedExp_kind:
+        result = PyType_GenericNew(NamedExp_type, NULL, NULL);
+        if (!result) goto failed;
+        value = ast2obj_expr(o->v.NamedExp.body);
+        if (!value) goto failed;
+        if (_PyObject_SetAttrId(result, &PyId_body, value) == -1)
+            goto failed;
+        Py_DECREF(value);
+        value = ast2obj_identifier(o->v.NamedExp.asname);
+        if (!value) goto failed;
+        if (_PyObject_SetAttrId(result, &PyId_asname, value) == -1)
             goto failed;
         Py_DECREF(value);
         break;
@@ -6446,6 +6493,44 @@ obj2ast_expr(PyObject* obj, expr_ty* out, PyArena* arena)
         if (*out == NULL) goto failed;
         return 0;
     }
+    isinstance = PyObject_IsInstance(obj, (PyObject*)NamedExp_type);
+    if (isinstance == -1) {
+        return 1;
+    }
+    if (isinstance) {
+        expr_ty body;
+        identifier asname;
+
+        if (_PyObject_LookupAttrId(obj, &PyId_body, &tmp) < 0) {
+            return 1;
+        }
+        if (tmp == NULL) {
+            PyErr_SetString(PyExc_TypeError, "required field \"body\" missing from NamedExp");
+            return 1;
+        }
+        else {
+            int res;
+            res = obj2ast_expr(tmp, &body, arena);
+            if (res != 0) goto failed;
+            Py_CLEAR(tmp);
+        }
+        if (_PyObject_LookupAttrId(obj, &PyId_asname, &tmp) < 0) {
+            return 1;
+        }
+        if (tmp == NULL) {
+            PyErr_SetString(PyExc_TypeError, "required field \"asname\" missing from NamedExp");
+            return 1;
+        }
+        else {
+            int res;
+            res = obj2ast_identifier(tmp, &asname, arena);
+            if (res != 0) goto failed;
+            Py_CLEAR(tmp);
+        }
+        *out = NamedExp(body, asname, lineno, col_offset, arena);
+        if (*out == NULL) goto failed;
+        return 0;
+    }
     isinstance = PyObject_IsInstance(obj, (PyObject*)Await_type);
     if (isinstance == -1) {
         return 1;
@@ -8319,6 +8404,8 @@ PyInit__ast(void)
         return NULL;
     if (PyDict_SetItemString(d, "GeneratorExp", (PyObject*)GeneratorExp_type) <
         0) return NULL;
+    if (PyDict_SetItemString(d, "NamedExp", (PyObject*)NamedExp_type) < 0)
+        return NULL;
     if (PyDict_SetItemString(d, "Await", (PyObject*)Await_type) < 0) return
         NULL;
     if (PyDict_SetItemString(d, "Yield", (PyObject*)Yield_type) < 0) return
