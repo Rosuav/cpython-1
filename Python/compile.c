@@ -100,6 +100,12 @@ enum {
     COMPILER_SCOPE_COMPREHENSION,
 };
 
+struct subscope {
+    struct subscope *prev; /* NULL on last subscope */
+    PyObject *name; /* (Borrowed ref) name of object in current subscope */
+    PyObject *mangled; /* effective name, with mangling done */
+};
+
 /* The following items change on entry and exit of code blocks.
    They must be saved and restored when returning to a block.
 */
@@ -128,6 +134,7 @@ struct compiler_unit {
        members, you can reach all early allocated blocks. */
     basicblock *u_blocks;
     basicblock *u_curblock; /* pointer to current block */
+    struct subscope *u_subscope; /* pointer to current subscope, if any */
 
     int u_nfblocks;
     struct fblockinfo u_fblock[CO_MAXBLOCKS];
@@ -784,6 +791,41 @@ compiler_use_next_block(struct compiler *c, basicblock *block)
     c->u->u_curblock->b_next = block;
     c->u->u_curblock = block;
     return block;
+}
+
+static struct subscope *
+compiler_new_subscope(struct compiler *c, PyObject *name)
+{
+    struct subscope *sc;
+    struct compiler_unit *u;
+
+    u = c->u;
+    sc = (struct subscope *)PyObject_Malloc(sizeof(struct subscope));
+    if (sc == NULL) {
+        PyErr_NoMemory();
+        return NULL;
+    }
+    memset((void *)sc, 0, sizeof(struct subscope));
+    sc->name = name;
+    /* Simple way to guarantee uniqueness: incorporate the pointer.
+    TODO: Make something shorter, but still guaranteed unique. */
+    sc->mangled = PyUnicode_FromFormat("%S.%p", name, sc);
+    sc->prev = u->u_subscope;
+    u->u_subscope = sc;
+    return sc;
+}
+
+static void
+compiler_pop_subscope(struct compiler *c, struct subscope *sc)
+{
+    struct compiler_unit *u;
+
+    u = c->u;
+    assert(u->u_subscope == sc); /* Should only ever remove the most recent scope */
+    u->u_subscope = sc->prev;
+    Py_DECREF(sc->mangled);
+    sc->prev = NULL; sc->mangled = sc->name = NULL; /* (is this necessary?) */
+    PyObject_Free((void *)sc);
 }
 
 /* Returns the offset of the next instruction in the current block's
@@ -2782,10 +2824,12 @@ compiler_try_except(struct compiler *c, stmt_ty s)
         ADDOP(c, POP_TOP);
         if (handler->v.ExceptHandler.name) {
             basicblock *cleanup_end, *cleanup_body;
+            struct subscope *newscope;
 
             cleanup_end = compiler_new_block(c);
             cleanup_body = compiler_new_block(c);
-            if (!(cleanup_end || cleanup_body))
+            newscope = compiler_new_subscope(c, handler->v.ExceptHandler.name);
+            if (!(cleanup_end || cleanup_body || newscope))
                 return 0;
 
             compiler_nameop(c, handler->v.ExceptHandler.name, Store);
@@ -2827,6 +2871,7 @@ compiler_try_except(struct compiler *c, stmt_ty s)
             ADDOP(c, END_FINALLY);
             ADDOP(c, POP_EXCEPT);
             compiler_pop_fblock(c, FINALLY_END, cleanup_end);
+            compiler_pop_subscope(c, newscope);
         }
         else {
             basicblock *cleanup_body;
@@ -3267,6 +3312,7 @@ compiler_nameop(struct compiler *c, identifier name, expr_context_ty ctx)
 {
     int op, scope;
     Py_ssize_t arg;
+    struct subscope *sc;
     enum { OP_FAST, OP_GLOBAL, OP_DEREF, OP_NAME } optype;
 
     PyObject *dict = c->u->u_names;
@@ -3284,6 +3330,19 @@ compiler_nameop(struct compiler *c, identifier name, expr_context_ty ctx)
     op = 0;
     optype = OP_NAME;
     scope = PyST_GetScope(c->u->u_ste, mangled);
+    sc = c->u->u_subscope;
+    while (sc) {
+        if (PyObject_RichCompareBool(sc->name, mangled, Py_EQ)) {
+            /* It's a subscope-local name. Use the uniquified version. */
+            assert(c->u->u_ste->ste_type == FunctionBlock); /* Currently not supported at top level. */
+            scope = LOCAL;
+            Py_DECREF(mangled);
+            mangled = sc->mangled;
+            Py_INCREF(mangled);
+            break;
+        }
+        sc = sc->prev;
+    }
     switch (scope) {
     case FREE:
         dict = c->u->u_freevars;
@@ -5383,7 +5442,7 @@ assemble_jump_offsets(struct assembler *a, struct compiler *c)
 }
 
 static PyObject *
-dict_keys_inorder(PyObject *dict, Py_ssize_t offset)
+dict_keys_inorder(PyObject *dict, Py_ssize_t offset, int truncate)
 {
     PyObject *tuple, *k, *v;
     Py_ssize_t i, pos = 0, size = PyDict_GET_SIZE(dict);
@@ -5398,6 +5457,18 @@ dict_keys_inorder(PyObject *dict, Py_ssize_t offset)
          * though. */
         k = PyTuple_GET_ITEM(k, 1);
         Py_INCREF(k);
+        /* HACK: Local variable names may need to be de-mangled. */
+        if (truncate) {
+            Py_ssize_t dot;
+            assert(PyUnicode_CheckExact(k));
+            dot = PyUnicode_FindChar(k, '.', 0, PyUnicode_GET_LENGTH(k), 1);
+            assert(dot != 0); /* We should not have a dot right at the beginning! */
+            if (dot > 0) {
+                PyObject *substr = PyUnicode_Substring(k, 0, dot);
+                Py_DECREF(k);
+                k = substr;
+            }
+        }
         assert((i - offset) < size);
         assert((i - offset) >= 0);
         PyTuple_SET_ITEM(tuple, i - offset, k);
@@ -5449,21 +5520,21 @@ makecode(struct compiler *c, struct assembler *a)
     int flags;
     int argcount, kwonlyargcount, maxdepth;
 
-    tmp = dict_keys_inorder(c->u->u_consts, 0);
+    tmp = dict_keys_inorder(c->u->u_consts, 0, 0);
     if (!tmp)
         goto error;
     consts = PySequence_List(tmp); /* optimize_code requires a list */
     Py_DECREF(tmp);
 
-    names = dict_keys_inorder(c->u->u_names, 0);
-    varnames = dict_keys_inorder(c->u->u_varnames, 0);
+    names = dict_keys_inorder(c->u->u_names, 0, 0);
+    varnames = dict_keys_inorder(c->u->u_varnames, 0, 1);
     if (!consts || !names || !varnames)
         goto error;
 
-    cellvars = dict_keys_inorder(c->u->u_cellvars, 0);
+    cellvars = dict_keys_inorder(c->u->u_cellvars, 0, 0);
     if (!cellvars)
         goto error;
-    freevars = dict_keys_inorder(c->u->u_freevars, PyTuple_Size(cellvars));
+    freevars = dict_keys_inorder(c->u->u_freevars, PyTuple_Size(cellvars), 0);
     if (!freevars)
         goto error;
 
