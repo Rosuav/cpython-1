@@ -513,14 +513,15 @@ compiler_unit_check(struct compiler_unit *u)
     }
 }
 
-/* Dispose of all subscopes. Should be done at the end of a logical statement. */
+/* Dispose of all subscopes back to a snap-point. */
 static void
-compiler_remove_subscopes(struct compiler *c)
+compiler_remove_subscopes(struct compiler *c, struct subscope *removeto)
 {
     struct compiler_unit *u = c->u;
     while (1) {
         struct subscope *sc = u->u_subscope;
-        if (!sc) break;
+        if (!sc) break; /* No more subscopes */
+        if (sc == removeto) break; /* Stop removing here */
         u->u_subscope = sc->prev;
         /* Unbind the name immediately */
         compiler_addop_o(c, DELETE_FAST, u->u_varnames, sc->mangled);
@@ -3228,11 +3229,14 @@ low_compiler_visit_stmt(struct compiler *c, stmt_ty s)
     return 1;
 }
 
+/* Compile one logical statement. At the end of that statement,
+remove all subscopes that were introduced during that statement. */
 static int
 compiler_visit_stmt(struct compiler *c, stmt_ty s)
 {
+    struct subscope *sc = c->u->u_subscope;
     int ret = low_compiler_visit_stmt(c, s);
-    compiler_remove_subscopes(c);
+    compiler_remove_subscopes(c, sc);
     return ret;
 }
 
