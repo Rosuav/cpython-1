@@ -515,13 +515,16 @@ compiler_unit_check(struct compiler_unit *u)
 
 /* Dispose of all subscopes. Should be done at the end of a logical statement. */
 static void
-compiler_remove_subscopes(struct compiler_unit *u)
+compiler_remove_subscopes(struct compiler *c)
 {
+    struct compiler_unit *u = c->u;
     while (1) {
         struct subscope *sc = u->u_subscope;
         if (!sc) break;
         u->u_subscope = sc->prev;
-        Py_DECREF(sc->mangled); /* Could potentially cause arbitrary code execution */
+        /* Unbind the name immediately */
+        compiler_addop_o(c, DELETE_FAST, u->u_varnames, sc->mangled);
+        Py_DECREF(sc->mangled);
         sc->prev = NULL; sc->mangled = sc->name = NULL; /* (is this necessary?) */
         PyObject_Free((void *)sc);
     }
@@ -533,7 +536,7 @@ compiler_unit_free(struct compiler_unit *u)
     basicblock *b, *next;
 
     compiler_unit_check(u);
-    compiler_remove_subscopes(u);
+    assert(!u->u_subscope); /* can't remove dangling subscopes without the compiler */
     b = u->u_blocks;
     while (b != NULL) {
         if (b->b_instr)
@@ -3220,7 +3223,7 @@ static int
 compiler_visit_stmt(struct compiler *c, stmt_ty s)
 {
     int ret = low_compiler_visit_stmt(c, s);
-    compiler_remove_subscopes(c->u);
+    compiler_remove_subscopes(c);
     return ret;
 }
 
