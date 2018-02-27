@@ -3133,7 +3133,7 @@ compiler_visit_stmt_expr(struct compiler *c, expr_ty value)
 }
 
 static int
-compiler_visit_stmt(struct compiler *c, stmt_ty s)
+low_compiler_visit_stmt(struct compiler *c, stmt_ty s)
 {
     Py_ssize_t i, n;
 
@@ -3214,6 +3214,14 @@ compiler_visit_stmt(struct compiler *c, stmt_ty s)
     }
 
     return 1;
+}
+
+static int
+compiler_visit_stmt(struct compiler *c, stmt_ty s)
+{
+    int ret = low_compiler_visit_stmt(c, s);
+    compiler_remove_subscopes(c->u);
+    return ret;
 }
 
 static int
