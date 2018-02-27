@@ -513,12 +513,27 @@ compiler_unit_check(struct compiler_unit *u)
     }
 }
 
+/* Dispose of all subscopes. Should be done at the end of a logical statement. */
+static void
+compiler_remove_subscopes(struct compiler_unit *u)
+{
+    while (1) {
+        struct subscope *sc = u->u_subscope;
+        if (!sc) break;
+        u->u_subscope = sc->prev;
+        Py_DECREF(sc->mangled); /* Could potentially cause arbitrary code execution */
+        sc->prev = NULL; sc->mangled = sc->name = NULL; /* (is this necessary?) */
+        PyObject_Free((void *)sc);
+    }
+}
+
 static void
 compiler_unit_free(struct compiler_unit *u)
 {
     basicblock *b, *next;
 
     compiler_unit_check(u);
+    compiler_remove_subscopes(u);
     b = u->u_blocks;
     while (b != NULL) {
         if (b->b_instr)
@@ -813,19 +828,6 @@ compiler_new_subscope(struct compiler *c, PyObject *name)
     sc->prev = u->u_subscope;
     u->u_subscope = sc;
     return sc;
-}
-
-static void
-compiler_pop_subscope(struct compiler *c, struct subscope *sc)
-{
-    struct compiler_unit *u;
-
-    u = c->u;
-    assert(u->u_subscope == sc); /* Should only ever remove the most recent scope */
-    u->u_subscope = sc->prev;
-    Py_DECREF(sc->mangled);
-    sc->prev = NULL; sc->mangled = sc->name = NULL; /* (is this necessary?) */
-    PyObject_Free((void *)sc);
 }
 
 /* Returns the offset of the next instruction in the current block's
@@ -4658,7 +4660,6 @@ compiler_visit_expr(struct compiler *c, expr_ty e)
         break;
     case NamedExp_kind:
         VISIT(c, expr, e->v.NamedExp.body);
-        printf("Named expression\n");
         compiler_new_subscope(c, e->v.NamedExp.asname);
         ADDOP(c, DUP_TOP);
         return compiler_nameop(c, e->v.NamedExp.asname, Store);
