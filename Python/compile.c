@@ -4659,6 +4659,7 @@ compiler_visit_expr(struct compiler *c, expr_ty e)
     case NamedExp_kind:
         VISIT(c, expr, e->v.NamedExp.body);
         printf("Named expression\n");
+        compiler_new_subscope(c, e->v.NamedExp.asname);
         ADDOP(c, DUP_TOP);
         return compiler_nameop(c, e->v.NamedExp.asname, Store);
     /* The following exprs can be assignment targets. */
