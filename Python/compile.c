@@ -534,9 +534,18 @@ static void
 compiler_unit_free(struct compiler_unit *u)
 {
     basicblock *b, *next;
+    struct subscope *sc, *scnext;
 
     compiler_unit_check(u);
-    assert(!u->u_subscope); /* can't remove dangling subscopes without the compiler */
+
+    sc = u->u_subscope;
+    while (sc != NULL) {
+        Py_DECREF(sc->mangled);
+        scnext = sc->prev;
+        PyObject_Free((void *)sc);
+        sc = scnext;
+    }
+
     b = u->u_blocks;
     while (b != NULL) {
         if (b->b_instr)
