@@ -2544,7 +2544,7 @@ static expr_ty
 ast_for_expr(struct compiling *c, const node *n)
 {
     /* handle the full range of simple expressions
-       test: or_test ['if' or_test 'else' test] | lambdef | '(' test 'as' NAME ')'
+       test: or_test ['if' or_test 'else' test] | lambdef
        test_nocond: or_test | lambdef_nocond
        or_test: and_test ('or' and_test)*
        and_test: not_test ('and' not_test)*
@@ -2569,16 +2569,9 @@ ast_for_expr(struct compiling *c, const node *n)
     switch (TYPE(n)) {
         case test:
         case test_nocond:
-            /*printf("test or testnocond: nch == %d", NCH(n));
-	    for (i=0; i<NCH(n); ++i) printf(", T%d=%d", i, TYPE(CHILD(n, i)));
-	    printf("\n");*/
             if (TYPE(CHILD(n, 0)) == lambdef ||
                 TYPE(CHILD(n, 0)) == lambdef_nocond)
                 return ast_for_lambdef(c, CHILD(n, 0));
-            else if (NCH(n) == 4) { /* Named expression */
-                n = CHILD(n, 1); /* TODO: Also bind it to a temp name */
-                goto loop;
-            }
             else if (NCH(n) > 1)
                 return ast_for_ifexpr(c, n);
             /* Fallthrough */
@@ -2886,6 +2879,15 @@ ast_for_testlist(struct compiling *c, const node* n)
     if (TYPE(n) == testlist_comp) {
         if (NCH(n) > 1)
             assert(TYPE(CHILD(n, 1)) != comp_for);
+
+        if (NCH(n) == 3 && TYPE(CHILD(n, 1)) == NAME
+                && strcmp(STR(CHILD(n, 1)), "as") == 0) {
+            expr_ty e = ast_for_testlist(c, CHILD(n, 0));
+            if (!e)
+                return NULL;
+            identifier asname = NEW_IDENTIFIER(CHILD(n, 2));
+            return NamedExp(e, asname, LINENO(n), n->n_col_offset, c->c_arena);
+        }
     }
     else {
         assert(TYPE(n) == testlist ||
