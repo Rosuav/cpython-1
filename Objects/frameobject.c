@@ -751,6 +751,11 @@ map_to_dict(PyObject *map, Py_ssize_t nmap, PyObject *dict, PyObject **values,
             value = PyCell_GET(value);
         }
         if (value == NULL) {
+            /* TODO: If the name has already come up _this run_, don't delete it. */
+            /* This will allow statement-local names to smoothly shadow outer names. */
+            /* It's important that this check be cheap in the normal case; it's okay */
+            /* for it to cost a bit extra for statement-local names, as they should */
+            /* be relatively uncommon. */
             if (PyObject_DelItem(dict, key) != 0) {
                 if (PyErr_ExceptionMatches(PyExc_KeyError))
                     PyErr_Clear();
