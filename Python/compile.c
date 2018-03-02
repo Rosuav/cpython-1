@@ -102,7 +102,7 @@ enum {
 
 struct subscope {
     struct subscope *prev; /* NULL on last subscope */
-    PyObject *name; /* (Borrowed ref) name of object in current subscope */
+    PyObject *name; /* (Borrowed ref) name of object in current subscope, or NULL if already gone */
     PyObject *mangled; /* effective name, with mangling done */
 };
 
@@ -513,24 +513,6 @@ compiler_unit_check(struct compiler_unit *u)
     }
 }
 
-/* Dispose of all subscopes back to a snap-point. */
-static void
-compiler_remove_subscopes(struct compiler *c, struct subscope *removeto)
-{
-    struct compiler_unit *u = c->u;
-    while (1) {
-        struct subscope *sc = u->u_subscope;
-        if (!sc) break; /* No more subscopes */
-        if (sc == removeto) break; /* Stop removing here */
-        u->u_subscope = sc->prev;
-        /* Unbind the name immediately */
-        compiler_addop_o(c, DELETE_FAST, u->u_varnames, sc->mangled);
-        Py_DECREF(sc->mangled);
-        sc->prev = NULL; sc->mangled = sc->name = NULL; /* (is this necessary?) */
-        PyObject_Free((void *)sc);
-    }
-}
-
 static void
 compiler_unit_free(struct compiler_unit *u)
 {
@@ -819,28 +801,6 @@ compiler_use_next_block(struct compiler *c, basicblock *block)
     c->u->u_curblock->b_next = block;
     c->u->u_curblock = block;
     return block;
-}
-
-static struct subscope *
-compiler_new_subscope(struct compiler *c, PyObject *name)
-{
-    struct subscope *sc;
-    struct compiler_unit *u;
-
-    u = c->u;
-    sc = (struct subscope *)PyObject_Malloc(sizeof(struct subscope));
-    if (sc == NULL) {
-        PyErr_NoMemory();
-        return NULL;
-    }
-    memset((void *)sc, 0, sizeof(struct subscope));
-    sc->name = name;
-    /* Simple way to guarantee uniqueness: incorporate the pointer.
-    TODO: Make something shorter, but still guaranteed unique. */
-    sc->mangled = PyUnicode_FromFormat("%S.%p", name, sc);
-    sc->prev = u->u_subscope;
-    u->u_subscope = sc;
-    return sc;
 }
 
 /* Returns the offset of the next instruction in the current block's
@@ -2839,14 +2799,13 @@ compiler_try_except(struct compiler *c, stmt_ty s)
         ADDOP(c, POP_TOP);
         if (handler->v.ExceptHandler.name) {
             basicblock *cleanup_end, *cleanup_body;
-            /*struct subscope *newscope;*/
 
             cleanup_end = compiler_new_block(c);
             cleanup_body = compiler_new_block(c);
-            /*newscope = compiler_new_subscope(c, handler->v.ExceptHandler.name);*/
-            if (!(cleanup_end || cleanup_body /*|| newscope*/))
+            if (!(cleanup_end || cleanup_body))
                 return 0;
 
+            /* Were except blocks to create subscopes, this would be where. */
             compiler_nameop(c, handler->v.ExceptHandler.name, Store);
             ADDOP(c, POP_TOP);
 
@@ -2886,7 +2845,6 @@ compiler_try_except(struct compiler *c, stmt_ty s)
             ADDOP(c, END_FINALLY);
             ADDOP(c, POP_EXCEPT);
             compiler_pop_fblock(c, FINALLY_END, cleanup_end);
-            /*compiler_pop_subscope(c, newscope);*/
         }
         else {
             basicblock *cleanup_body;
@@ -3229,6 +3187,41 @@ low_compiler_visit_stmt(struct compiler *c, stmt_ty s)
     return 1;
 }
 
+/* Flag a subscope as "removed" such that it is no longer functional */
+static void
+compiler_unbind_subscope(struct compiler *c, struct subscope *sc)
+{
+    Py_ssize_t arg;
+    if (sc->name) {
+        if (c->u->u_ste->ste_type == FunctionBlock) {
+            compiler_addop_o(c, DELETE_FAST, c->u->u_varnames, sc->mangled);
+        }
+        else {
+            arg = compiler_add_o(c, c->u->u_names, sc->mangled);
+            compiler_addop_i(c, DELETE_NAME, arg);
+        }
+        sc->name = NULL;
+    }
+}
+
+/* Dispose of all subscopes back to a snap-point. */
+static void
+compiler_remove_subscopes(struct compiler *c, struct subscope *removeto)
+{
+    struct compiler_unit *u = c->u;
+    while (1) {
+        struct subscope *sc = u->u_subscope;
+        if (!sc) break; /* No more subscopes */
+        if (sc == removeto) break; /* Stop removing here */
+        u->u_subscope = sc->prev;
+        /* TODO: What happens if one of these calls fails? */
+        compiler_unbind_subscope(c, sc);
+        Py_DECREF(sc->mangled);
+        sc->prev = NULL; sc->mangled = sc->name = NULL; /* (is this necessary?) */
+        PyObject_Free((void *)sc);
+    }
+}
+
 /* Compile one logical statement. At the end of that statement,
 remove all subscopes that were introduced during that statement. */
 static int
@@ -3358,14 +3351,19 @@ compiler_nameop(struct compiler *c, identifier name, expr_context_ty ctx)
     scope = PyST_GetScope(c->u->u_ste, mangled);
     sc = c->u->u_subscope;
     while (sc) {
-        if (PyObject_RichCompareBool(sc->name, mangled, Py_EQ)) {
-            /* It's a subscope-local name. Use the uniquified version. */
-            assert(c->u->u_ste->ste_type == FunctionBlock); /* Currently not supported at top level. */
-            scope = LOCAL;
-            Py_DECREF(mangled);
-            mangled = sc->mangled;
-            Py_INCREF(mangled);
-            break;
+        if (sc->name && PyObject_RichCompareBool(sc->name, mangled, Py_EQ)) {
+            /* It's a subscope-local name. If we're loading this name,
+            use the local form; otherwise, destroy the local one. */
+            if (ctx == Load) {
+                scope = LOCAL;
+                Py_DECREF(mangled);
+                mangled = sc->mangled;
+                Py_INCREF(mangled);
+                break;
+            }
+            else {
+                compiler_unbind_subscope(c, sc);
+            }
         }
         sc = sc->prev;
     }
@@ -4581,6 +4579,36 @@ compiler_with(struct compiler *c, stmt_ty s, int pos)
 }
 
 static int
+compiler_new_subscope(struct compiler *c, PyObject *name)
+{
+    struct subscope *sc;
+    struct compiler_unit *u;
+    Py_ssize_t arg;
+
+    u = c->u;
+    sc = (struct subscope *)PyObject_Malloc(sizeof(struct subscope));
+    if (sc == NULL) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    memset((void *)sc, 0, sizeof(struct subscope));
+    sc->name = name;
+    /* Simple way to guarantee uniqueness: incorporate the pointer.
+    TODO: Make something shorter, but still guaranteed unique. */
+    sc->mangled = PyUnicode_FromFormat("%S.%p", name, sc);
+    sc->prev = u->u_subscope;
+    u->u_subscope = sc;
+    /* Immediately store the value */
+    if (c->u->u_ste->ste_type == FunctionBlock) {
+        return compiler_addop_o(c, STORE_FAST, c->u->u_varnames, sc->mangled);
+    }
+    arg = compiler_add_o(c, c->u->u_names, sc->mangled);
+    if (arg < 0)
+        return 0;
+    return compiler_addop_i(c, STORE_NAME, arg);
+}
+
+static int
 compiler_visit_expr(struct compiler *c, expr_ty e)
 {
     /* If expr e has a different line number than the last expr/stmt,
@@ -4684,9 +4712,8 @@ compiler_visit_expr(struct compiler *c, expr_ty e)
         break;
     case NamedExp_kind:
         VISIT(c, expr, e->v.NamedExp.body);
-        compiler_new_subscope(c, e->v.NamedExp.asname);
         ADDOP(c, DUP_TOP);
-        return compiler_nameop(c, e->v.NamedExp.asname, Store);
+        return compiler_new_subscope(c, e->v.NamedExp.asname);
     /* The following exprs can be assignment targets. */
     case Attribute_kind:
         if (e->v.Attribute.ctx != AugStore)
