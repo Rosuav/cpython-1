@@ -755,7 +755,7 @@ map_to_dict(PyObject *map, Py_ssize_t nmap, PyObject *dict, PyObject **values,
             /* This will allow statement-local names to smoothly shadow outer names. */
             /* It's important that this check be cheap in the normal case; it's okay */
             /* for it to cost a bit extra for statement-local names, as they should */
-            /* be relatively uncommon. */
+            /* be relatively uncommon. Alternatively, detect all SLNBs and suppress? */
             if (PyObject_DelItem(dict, key) != 0) {
                 if (PyErr_ExceptionMatches(PyExc_KeyError))
                     PyErr_Clear();
