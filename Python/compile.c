@@ -3895,6 +3895,15 @@ compiler_sync_comprehension_generator(struct compiler *c,
     VISIT(c, expr, gen->iter);
     ADDOP(c, GET_ITER);
 
+    /* Generator expressions: To force early evaluation of the outermost
+    iterable, we insert a yield point. */
+    if (type == COMP_GENEXP && gen_index == 0) {
+        /* yield None */
+        ADDOP_O(c, LOAD_CONST, Py_None, consts);
+        ADDOP(c, YIELD_VALUE);
+        ADDOP(c, POP_TOP);
+    }
+
     compiler_use_next_block(c, start);
     ADDOP_JREL(c, FOR_ITER, anchor);
     NEXT_BLOCK(c);
@@ -4138,6 +4147,17 @@ compiler_comprehension(struct compiler *c, expr_ty e, int type,
         ADDOP(c, GET_AWAITABLE);
         ADDOP_O(c, LOAD_CONST, Py_None, consts);
         ADDOP(c, YIELD_FROM);
+    }
+
+    if (type == COMP_GENEXP) {
+        /* Pump the generator until the first yield point */
+	/* next(gen) */
+	ADDOP_I(c, FOR_ITER, 2);
+	ADDOP(c, POP_TOP);
+	/* What happens if we take the jump (ie if StopIteration is raised)?
+	Ideally it should raise RuntimeError or something. Is there any way
+	to trigger this? Anything that *actually* raises StopIteration will
+	already have this converted into RuntimeError. */
     }
 
     return 1;
