@@ -63,16 +63,15 @@ AT = 49
 ATEQUAL = 50
 RARROW = 51
 ELLIPSIS = 52
+COLONEQUAL = 53
 # Don't forget to update the table _PyParser_TokenNames in tokenizer.c!
-OP = 53
-AWAIT = 54
-ASYNC = 55
-ERRORTOKEN = 56
+OP = 54
+ERRORTOKEN = 55
 # These aren't used by the C tokenizer but are needed for tokenize.py
-COMMENT = 57
-NL = 58
-ENCODING = 59
-N_TOKENS = 60
+COMMENT = 56
+NL = 57
+ENCODING = 58
+N_TOKENS = 59
 # Special definitions for cooperation with parser
 NT_OFFSET = 256
 #--end constants--
