@@ -2571,15 +2571,6 @@ ast_for_expr(struct compiling *c, const node *n)
             if (TYPE(CHILD(n, 0)) == lambdef ||
                 TYPE(CHILD(n, 0)) == lambdef_nocond)
                 return ast_for_lambdef(c, CHILD(n, 0));
-            else if (NCH(n) == 3) {
-                /* TODO: Assert that child 1 is ":=" */
-                expr_ty t = ast_for_expr(c, CHILD(n, 0));
-                expr_ty e = ast_for_expr(c, CHILD(n, 2));
-                if (!t || !e) return NULL;
-                if (!set_context(c, t, Store, CHILD(n, 0)))
-                    return NULL;
-                return AssignExp(t, e, LINENO(n), n->n_col_offset, c->c_arena);
-            }
             else if (NCH(n) > 1)
                 return ast_for_ifexpr(c, n);
             /* Fallthrough */
@@ -2660,11 +2651,25 @@ ast_for_expr(struct compiling *c, const node *n)
 
         case star_expr:
             return ast_for_starred(c, n);
+        case expr:
+	{
+            if (NCH(n) == 1) {
+                n = CHILD(n, 0);
+                goto loop;
+            }
+            /* TODO: Assert that child 1 is ":=" */
+            expr_ty t = ast_for_expr(c, CHILD(n, 0));
+            expr_ty e = ast_for_expr(c, CHILD(n, 2));
+            if (!t || !e) return NULL;
+            if (!set_context(c, t, Store, CHILD(n, 0)))
+                return NULL;
+            return AssignExp(t, e, LINENO(n), n->n_col_offset, c->c_arena);
+        }
         /* The next five cases all handle BinOps.  The main body of code
            is the same in each case, but the switch turned inside out to
            reuse the code for each type of operator.
          */
-        case expr:
+        case or_expr:
         case xor_expr:
         case and_expr:
         case shift_expr:
