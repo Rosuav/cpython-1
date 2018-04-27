@@ -49,6 +49,11 @@ future_check_features(PyFutureFeatures *ff, stmt_ty s, PyObject *filename)
                             "not a chance");
             PyErr_SyntaxLocationObject(filename, s->lineno, s->col_offset);
             return 0;
+        } else if (strcmp(feature, "colon_equals") == 0) {
+            PyErr_SetString(PyExc_SyntaxError,
+                            "but there must be only one (1) obvious way");
+            PyErr_SyntaxLocationObject(filename, s->lineno, s->col_offset);
+            return 0;
         } else {
             PyErr_Format(PyExc_SyntaxError,
                          UNDEFINED_FUTURE_FEATURE, feature);
